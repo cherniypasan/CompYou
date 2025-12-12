@@ -147,7 +147,7 @@ class CloudDB {
         }
     }
     
-    // Загрузка всех заказов (из облака + локальные)
+    // Загрузка всех заказов (из облака + локальные) - ОБНОВЛЕННЫЙ МЕТОД
     async loadAllOrders() {
         const localOrders = this.loadOrdersLocal();
         
@@ -157,46 +157,60 @@ class CloudDB {
         }
         
         try {
-            // Загружаем из облака с JSONP для обхода CORS
-            console.log('Cloud DB: Загружаем заказы из облака...');
+            // Используем JSONP для обхода CORS проблем
+            console.log('Cloud DB: Загружаем заказы из облака через JSONP...');
             
-            const response = await fetch(`${this.API_URL}?action=getOrders&t=${Date.now()}`, {
-                method: 'GET',
-                mode: 'cors',
-                headers: {
-                    'Accept': 'application/json'
-                }
+            // Создаем уникальное имя callback функции
+            const callbackName = 'compyou_callback_' + Date.now();
+            
+            return new Promise((resolve, reject) => {
+                // Сохраняем ссылку на this
+                const self = this;
+                
+                // Создаем callback функцию
+                window[callbackName] = function(response) {
+                    // Очищаем callback
+                    delete window[callbackName];
+                    
+                    if (response && response.success) {
+                        const cloudOrders = response.data || [];
+                        console.log(`Cloud DB: Загружено ${cloudOrders.length} заказов из облака`);
+                        
+                        // Объединяем заказы
+                        const mergedOrders = self.mergeOrders(cloudOrders, localOrders);
+                        
+                        // Сохраняем локально
+                        self.saveOrdersLocal(mergedOrders);
+                        
+                        self.cachedOrders = mergedOrders;
+                        resolve(mergedOrders);
+                    } else {
+                        console.warn('Cloud DB: Ошибка загрузки из облака:', response ? response.error : 'Unknown error');
+                        resolve(localOrders);
+                    }
+                };
+                
+                // Создаем script элемент для JSONP
+                const script = document.createElement('script');
+                script.src = `${self.API_URL}?action=getOrders&callback=${callbackName}&t=${Date.now()}`;
+                
+                // Обработка ошибок
+                script.onerror = function() {
+                    delete window[callbackName];
+                    console.warn('Cloud DB: JSONP запрос не удался');
+                    resolve(localOrders);
+                };
+                
+                // Добавляем script на страницу
+                document.head.appendChild(script);
+                
+                // Автоматически удаляем script через 10 секунд
+                setTimeout(() => {
+                    if (script.parentNode) {
+                        script.parentNode.removeChild(script);
+                    }
+                }, 10000);
             });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
-            const result = await response.json();
-            console.log('Cloud DB Response:', result);
-            
-            // Проверяем формат ответа
-            if (!result.success) {
-                console.warn('Cloud DB: Ошибка от сервера:', result.error);
-                return localOrders;
-            }
-            
-            // Получаем заказы из data
-            let cloudOrders = [];
-            if (result.data && Array.isArray(result.data)) {
-                cloudOrders = result.data;
-            }
-            
-            console.log(`Cloud DB: Загружено ${cloudOrders.length} заказов из облака`);
-            
-            // Объединяем заказы
-            const mergedOrders = this.mergeOrders(cloudOrders, localOrders);
-            
-            // Сохраняем локально
-            this.saveOrdersLocal(mergedOrders);
-            
-            this.cachedOrders = mergedOrders;
-            return mergedOrders;
             
         } catch (error) {
             console.warn('Cloud DB: Ошибка загрузки из облака:', error.message);
@@ -297,7 +311,7 @@ class CloudDB {
         }
     }
     
-    // Синхронизация локальных и облачных данных
+    // Синхронизация локальных и облачных данных - ОБНОВЛЕННЫЙ МЕТОД
     async syncOrders() {
         console.log('Cloud DB: Начало синхронизации...');
         
@@ -312,26 +326,8 @@ class CloudDB {
         }
         
         try {
-            // Загружаем из облака
-            const response = await fetch(`${this.API_URL}?action=getOrders&t=${Date.now()}`, {
-                method: 'GET',
-                mode: 'cors',
-                headers: {
-                    'Accept': 'application/json'
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
-            const result = await response.json();
-            
-            if (!result.success) {
-                throw new Error(result.error || 'Ошибка сервера');
-            }
-            
-            const cloudOrders = result.data || [];
+            // Загружаем из облака через JSONP
+            const cloudOrders = await this.loadAllOrders();
             
             console.log(`Cloud DB: Облако: ${cloudOrders.length}, Локально: ${localOrders.length}`);
             
@@ -351,16 +347,7 @@ class CloudDB {
             }
             
             // Загружаем обновленный список
-            const finalResponse = await fetch(`${this.API_URL}?action=getOrders&t=${Date.now()}`, {
-                method: 'GET',
-                mode: 'cors'
-            });
-            const finalResult = await finalResponse.json();
-            const finalOrders = finalResult.data || [];
-            
-            // Сохраняем локально
-            this.saveOrdersLocal(finalOrders);
-            this.cachedOrders = finalOrders;
+            const finalOrders = await this.loadAllOrders();
             
             console.log('Cloud DB: Синхронизация завершена');
             
@@ -589,83 +576,7 @@ class CloudDB {
         
         return fileName;
     }
-    
-    // Импорт заказов из файла
-    importFromFile(file, merge = true) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            
-            reader.onload = (event) => {
-                try {
-                    let importedOrders;
-                    
-                    if (file.name.endsWith('.json')) {
-                        importedOrders = JSON.parse(event.target.result);
-                    } else if (file.name.endsWith('.csv')) {
-                        // Простой CSV парсинг
-                        const lines = event.target.result.split('\n');
-                        const headers = lines[0].split(',').map(h => h.trim().replace(/^"(.*)"$/, '$1'));
-                        importedOrders = lines.slice(1)
-                            .filter(line => line.trim())
-                            .map(line => {
-                                const values = line.split(',').map(v => v.trim().replace(/^"(.*)"$/, '$1'));
-                                return {
-                                    id: parseInt(values[0]) || Date.now(),
-                                    fullName: values[1] || '',
-                                    phone: values[2] || '',
-                                    email: values[3] || '',
-                                    address: values[4] || '',
-                                    orderType: values[5] || 'custom',
-                                    total: parseFloat(values[6]) || 0,
-                                    date: values[7] || new Date().toLocaleString('ru-RU'),
-                                    status: values[8] || 'Новый'
-                                };
-                            });
-                    }
-                    
-                    if (!Array.isArray(importedOrders)) {
-                        throw new Error('Invalid file format');
-                    }
-                    
-                    let currentOrders = this.loadOrdersLocal();
-                    let result;
-                    
-                    if (merge) {
-                        // Объединяем с существующими
-                        result = this.mergeOrders(currentOrders, importedOrders);
-                    } else {
-                        // Заменяем существующие
-                        result = importedOrders;
-                    }
-                    
-                    // Сохраняем локально
-                    this.saveOrdersLocal(result);
-                    
-                    resolve({
-                        success: true,
-                        imported: importedOrders.length,
-                        total: result.length
-                    });
-                    
-                } catch (error) {
-                    reject(new Error(`Ошибка импорта: ${error.message}`));
-                }
-            };
-            
-            reader.onerror = () => reject(new Error('Ошибка чтения файла'));
-            reader.readAsText(file);
-        });
-    }
 }
 
 // Создаем глобальный экземпляр CloudDB
 window.cloudDB = new CloudDB();
-
-// Инициализация при загрузке страницы
-document.addEventListener('DOMContentLoaded', function() {
-    // Проверяем, что cloudDB создан
-    if (!window.cloudDB) {
-        console.error('CloudDB не инициализирован!');
-        window.cloudDB = new CloudDB();
-    }
-});
