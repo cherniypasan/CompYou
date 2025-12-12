@@ -93,14 +93,7 @@ const components = {
         document.getElementById('orderForm').addEventListener('submit', function(e) {
             e.preventDefault();
             submitOrder();
-            cloudDB.saveOrder(order).then(result => {
-        if (result.cloudSaved) {
-            console.log('Заказ сохранен в облако');
-        } else if (result.localOnly) {
-            console.log('Заказ сохранен только локально');
-        }
         });
-    });
     
     // Обработка отправки формы входа в админ-панель
     document.getElementById('adminLoginForm').addEventListener('submit', function(e) {
@@ -1296,7 +1289,7 @@ function closePaymentSuccess() {
 }
 
 // Отправка заказа (обновленная с проверкой валидации)
-function submitOrder() {
+async function submitOrder() {
     // Проверяем валидность формы
     if (!validateForm()) {
         showNotification('Пожалуйста, исправьте ошибки в форме', 'error');
@@ -1328,7 +1321,7 @@ function submitOrder() {
 }
 
 // Новая функция для завершения оформления заказа после оплаты
-function proceedWithOrder() {
+async function proceedWithOrder() {
     // Получение данных из формы
     const fullName = document.getElementById('fullName').value;
     const phone = document.getElementById('phone').value;
@@ -1368,7 +1361,21 @@ function proceedWithOrder() {
         } : {})
     };
     
-    // Добавление заказа в список
+    // Сохраняем в облачную базу данных
+    try {
+        const result = await cloudDB.saveOrder(order);
+        if (result.cloudSaved) {
+            console.log('Заказ сохранен в облако');
+            showNotification('Заказ сохранен в облачную базу данных', 'success');
+        } else if (result.localOnly) {
+            console.log('Заказ сохранен только локально');
+            showNotification('Заказ сохранен локально (облако недоступно)', 'warning');
+        }
+    } catch (error) {
+        console.error('Ошибка сохранения заказа:', error);
+    }
+    
+    // Добавление заказа в локальный список
     orders.push(order);
     localStorage.setItem('compyou_orders', JSON.stringify(orders));
     
