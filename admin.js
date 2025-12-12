@@ -125,6 +125,57 @@ async function loadOrders() {
     }
     
     try {
+        console.log('Начинаем загрузку заказов...');
+        
+        // Сначала пробуем загрузить из localStorage
+        const localOrders = JSON.parse(localStorage.getItem('compyou_orders')) || [];
+        console.log('Локальные заказы (из localStorage):', localOrders.length);
+        
+        // Проверяем наличие cloudDB
+        if (window.cloudDB && typeof cloudDB.loadAllOrders === 'function') {
+            console.log('Пробуем загрузить из облака...');
+            try {
+                const cloudOrders = await cloudDB.loadAllOrders();
+                console.log('Заказов из облака:', cloudOrders.length);
+                
+                // Используем облачные заказы, если они есть
+                if (cloudOrders.length > 0) {
+                    orders = cloudOrders;
+                    localStorage.setItem('compyou_orders', JSON.stringify(cloudOrders));
+                    console.log('Используем заказы из облака');
+                } else {
+                    orders = localOrders;
+                    console.log('Облако пустое, используем локальные заказы');
+                }
+            } catch (cloudError) {
+                console.warn('Ошибка загрузки из облака:', cloudError);
+                orders = localOrders;
+                console.log('Используем локальные заказы из-за ошибки облака');
+            }
+        } else {
+            orders = localOrders;
+            console.log('CloudDB недоступен, используем локальные заказы');
+        }
+        
+    } catch (error) {
+        console.error('Критическая ошибка загрузки заказов:', error);
+        // Используем пустой массив как запасной вариант
+        orders = [];
+    }
+    
+    console.log('Итоговое количество заказов:', orders.length);
+    
+    filteredOrders = [...orders];
+    updateStats();
+    displayOrders();
+}
+    
+    // Если идет синхронизация, не загружаем заново
+    if (isSyncing) {
+        return;
+    }
+    
+    try {
         // Проверяем наличие cloudDB
         if (window.cloudDB && typeof cloudDB.loadAllOrders === 'function') {
             console.log('Загружаем заказы из облака...');
@@ -649,35 +700,70 @@ async function syncWithCloud() {
             return;
         }
         
-        // Сохраняем текущие локальные заказы
-        const localOrdersBefore = orders.length;
+        // Сохраняем текущие локальные заказы ДО синхронизации
+        const localOrdersBefore = [...orders];
+        
+        console.log('Заказов до синхронизации:', localOrdersBefore.length);
         
         // Выполняем синхронизацию
         const result = await cloudDB.syncOrders();
         
         if (result.success) {
-            // Загружаем обновленные данные
+            // Загружаем обновленные данные ИЗ cloudDB
+            console.log('Загружаем данные после синхронизации...');
             const freshOrders = await cloudDB.loadAllOrders();
+            
+            console.log('Заказов после загрузки из cloudDB:', freshOrders.length);
+            
+            // Проверяем, что мы получили заказы
+            if (!Array.isArray(freshOrders)) {
+                throw new Error('Неверный формат данных из облака');
+            }
             
             // Сохраняем данные
             orders = freshOrders;
             filteredOrders = [...freshOrders];
+            
+            // Сохраняем в localStorage
             localStorage.setItem('compyou_orders', JSON.stringify(freshOrders));
             
             // Обновляем интерфейс
             updateStats();
             displayOrders();
             
+            // Сравниваем заказы ДО и ПОСЛЕ
             const localOrdersAfter = freshOrders.length;
-            const difference = localOrdersAfter - localOrdersBefore;
             
-            if (difference > 0) {
-                showNotification(`Синхронизация завершена! Добавлено ${difference} новых заказов. Всего: ${localOrdersAfter}`, 'success');
-            } else if (difference < 0) {
-                showNotification(`Синхронизация завершена! Заказов стало меньше на ${Math.abs(difference)}. Всего: ${localOrdersAfter}`, 'warning');
-            } else {
-                showNotification(`Синхронизация завершена! Заказов: ${localOrdersAfter}`, 'success');
+            // Находим ID заказов, которые были до
+            const beforeIds = new Set(localOrdersBefore.map(order => order.id));
+            const afterIds = new Set(freshOrders.map(order => order.id));
+            
+            // Находим новые заказы (которые есть после, но не было до)
+            const newOrders = freshOrders.filter(order => !beforeIds.has(order.id));
+            
+            // Находим удаленные заказы (которые были до, но нет после)
+            const removedOrders = localOrdersBefore.filter(order => !afterIds.has(order.id));
+            
+            console.log('Новых заказов:', newOrders.length);
+            console.log('Удаленных заказов:', removedOrders.length);
+            
+            // Формируем сообщение
+            let message = `Синхронизация завершена! Всего заказов: ${localOrdersAfter}`;
+            
+            if (newOrders.length > 0) {
+                message += `\nДобавлено новых: ${newOrders.length}`;
             }
+            
+            if (removedOrders.length > 0) {
+                message += `\nУдалено из облака: ${removedOrders.length}`;
+                
+                // Показываем предупреждение, если заказы были удалены
+                if (removedOrders.length > 0) {
+                    console.warn('Удаленные заказы:', removedOrders.map(o => `#${o.id}`));
+                }
+            }
+            
+            showNotification(message, newOrders.length > 0 ? 'success' : 'info');
             
         } else {
             if (result.reason === 'cloud_disabled') {
@@ -690,6 +776,10 @@ async function syncWithCloud() {
     } catch (error) {
         console.error('Ошибка синхронизации:', error);
         showNotification(`Ошибка синхронизации: ${error.message}`, 'error');
+        
+        // В случае ошибки показываем текущие заказы
+        updateStats();
+        displayOrders();
     } finally {
         isSyncing = false;
     }
@@ -766,3 +856,4 @@ function showNotification(message, type = 'success') {
         }, 300);
     }, 3000);
 }
+
