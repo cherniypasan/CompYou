@@ -361,7 +361,7 @@ function showOrderDetails(orderId) {
             <div class="detail-item">
                 <h4>Детали оплаты</h4>
                 <p>Карта: **** ${order.paymentDetails.lastFourDigits}<br>
-                   Дата оплаты: ${order.paymentDetails.paymentDate}</p>
+                   Дата оплата: ${order.paymentDetails.paymentDate}</p>
             </div>
         `;
     }
