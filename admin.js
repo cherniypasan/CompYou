@@ -5,6 +5,7 @@ let sortDirection = { date: 'desc', total: 'desc', id: 'desc' };
 let currentSort = 'date';
 let currentFilter = 'all';
 let selectedOrders = new Set();
+let isSyncing = false; // Флаг для предотвращения повторной синхронизации
 
 // Инициализация админ-панели
 document.addEventListener('DOMContentLoaded', function() {
@@ -18,8 +19,7 @@ document.addEventListener('DOMContentLoaded', function() {
     orders = JSON.parse(localStorage.getItem('compyou_orders')) || [];
     filteredOrders = [...orders];
     
-    loadOrders();
-    updateStats();
+    initializeOrders();
     
     // Обработчик поиска
     document.getElementById('searchInput').addEventListener('input', function() {
@@ -27,11 +27,19 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // Установка активной кнопки сортировки
-    document.querySelectorAll('.sort-btn')[0].classList.add('active');
+    if (document.querySelectorAll('.sort-btn').length > 0) {
+        document.querySelectorAll('.sort-btn')[0].classList.add('active');
+    }
     
     // Инициализация мобильного UX
     initMobileAdminUX();
 });
+
+// Инициализация заказов (без автоматической синхронизации)
+function initializeOrders() {
+    updateStats();
+    displayOrders();
+}
 
 // Инициализация мобильного UX для админ-панели
 function initMobileAdminUX() {
@@ -50,7 +58,7 @@ function initMobileAdminUX() {
         selects.forEach(select => {
             select.style.fontSize = '14px';
             select.style.padding = '8px';
-            select.style.minHeight = '44px'; // Минимальная высота для касания
+            select.style.minHeight = '44px';
         });
         
         // Улучшаем кнопки действий
@@ -66,7 +74,7 @@ function initMobileAdminUX() {
         // Улучшаем инпут поиска
         const searchInput = document.getElementById('searchInput');
         if (searchInput) {
-            searchInput.style.fontSize = '16px'; // Предотвращает зум на iOS
+            searchInput.style.fontSize = '16px';
             searchInput.style.minHeight = '44px';
         }
         
@@ -88,7 +96,6 @@ function initMobileAdminUX() {
                 const diffX = startX - endX;
                 const diffY = startY - endY;
                 
-                // Если свайп вправо больше чем на 100px и вертикальный свайп небольшой
                 if (diffX > 100 && Math.abs(diffY) < 50) {
                     closeOrderDetails();
                 }
@@ -97,7 +104,7 @@ function initMobileAdminUX() {
     }
 }
 
-// Загрузка заказов
+// Загрузка заказов (без автоматической синхронизации)
 async function loadOrders() {
     // Показываем индикатор загрузки
     const tbody = document.getElementById('ordersTableBody');
@@ -106,42 +113,42 @@ async function loadOrders() {
             <tr>
                 <td colspan="10" style="text-align: center; padding: 50px;">
                     <div class="loading-spinner" style="width: 40px; height: 40px; border: 4px solid rgba(138, 43, 226, 0.3); border-top-color: var(--primary-color); border-radius: 50%; margin: 0 auto 20px; animation: spin 1s linear infinite;"></div>
-                    <p>Загружаем заказы...</p>
+                    <p>Обновляем список заказов...</p>
                 </td>
             </tr>
         `;
     }
     
-    // Загружаем из облачной БД
+    // Если идет синхронизация, не загружаем заново
+    if (isSyncing) {
+        return;
+    }
+    
     try {
         // Проверяем наличие cloudDB
-        if (window.cloudDB) {
-            orders = await cloudDB.loadAllOrders();
-            localStorage.setItem('compyou_orders', JSON.stringify(orders));
+        if (window.cloudDB && typeof cloudDB.loadAllOrders === 'function') {
+            console.log('Загружаем заказы из облака...');
+            const cloudOrders = await cloudDB.loadAllOrders();
             
-            // Обновляем статистику
-            const stats = cloudDB.getStats();
-            console.log('Загружено заказов:', stats.totalOrders);
+            // Сохраняем заказы
+            orders = cloudOrders;
+            localStorage.setItem('compyou_orders', JSON.stringify(cloudOrders));
             
-            // Показываем уведомление о синхронизации
-            if (stats.useCloud && stats.cachedOrders > 0) {
-                console.log(`Загружено ${stats.cachedOrders} заказов из облака`);
-            }
+            console.log(`Загружено ${cloudOrders.length} заказов из облака`);
+            
         } else {
-            // Используем локальные заказы если cloudDB недоступен
+            // Используем локальные заказы
             orders = JSON.parse(localStorage.getItem('compyou_orders')) || [];
             console.log('Используем локальные заказы:', orders.length);
         }
         
     } catch (error) {
         console.error('Ошибка загрузки заказов:', error);
-        // Используем локальные заказы как запасной вариант
+        // Используем локальные заказы
         orders = JSON.parse(localStorage.getItem('compyou_orders')) || [];
-        showNotification('Используем локальные заказы', 'warning');
     }
     
     filteredOrders = [...orders];
-    sortOrders(currentSort);
     updateStats();
     displayOrders();
 }
@@ -149,7 +156,7 @@ async function loadOrders() {
 // Обновление статистики
 function updateStats() {
     const totalOrders = orders.length;
-    const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
+    const totalRevenue = orders.reduce((sum, order) => sum + (order.total || 0), 0);
     const newOrders = orders.filter(order => order.status === 'Новый').length;
     const averageOrder = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
     
@@ -166,11 +173,11 @@ function searchOrders(query) {
     } else {
         const searchTerm = query.toLowerCase();
         filteredOrders = orders.filter(order => 
-            order.id.toString().includes(searchTerm) ||
-            order.fullName.toLowerCase().includes(searchTerm) ||
-            order.phone.toLowerCase().includes(searchTerm) ||
-            order.email.toLowerCase().includes(searchTerm) ||
-            order.address.toLowerCase().includes(searchTerm)
+            (order.id && order.id.toString().includes(searchTerm)) ||
+            (order.fullName && order.fullName.toLowerCase().includes(searchTerm)) ||
+            (order.phone && order.phone.toLowerCase().includes(searchTerm)) ||
+            (order.email && order.email.toLowerCase().includes(searchTerm)) ||
+            (order.address && order.address.toLowerCase().includes(searchTerm))
         );
     }
     
@@ -204,16 +211,16 @@ function sortOrders(criteria, button = null, skipButtonActive = false) {
         
         switch(criteria) {
             case 'date':
-                valA = new Date(a.date.split(', ')[0].split('.').reverse().join('-'));
-                valB = new Date(b.date.split(', ')[0].split('.').reverse().join('-'));
+                valA = a.date ? new Date(a.date.split(', ')[0].split('.').reverse().join('-')) : new Date(0);
+                valB = b.date ? new Date(b.date.split(', ')[0].split('.').reverse().join('-')) : new Date(0);
                 break;
             case 'total':
-                valA = a.total;
-                valB = b.total;
+                valA = a.total || 0;
+                valB = b.total || 0;
                 break;
             case 'id':
-                valA = a.id;
-                valB = b.id;
+                valA = a.id || 0;
+                valB = b.id || 0;
                 break;
             default:
                 return 0;
@@ -261,6 +268,8 @@ function displayOrders() {
     const ordersTableBody = document.getElementById('ordersTableBody');
     const ordersCountElement = document.getElementById('ordersCount');
     
+    if (!ordersTableBody) return;
+    
     ordersTableBody.innerHTML = '';
     
     if (filteredOrders.length === 0) {
@@ -272,13 +281,15 @@ function displayOrders() {
                 </td>
             </tr>
         `;
-        ordersCountElement.textContent = `Показано 0 из ${orders.length} заказов`;
+        if (ordersCountElement) {
+            ordersCountElement.textContent = `Показано 0 из ${orders.length} заказов`;
+        }
         return;
     }
     
     filteredOrders.forEach(order => {
         const isSelected = selectedOrders.has(order.id);
-        const statusClass = `status-${order.status.toLowerCase().replace(' ', '-')}`;
+        const statusClass = order.status ? `status-${order.status.toLowerCase().replace(/ /g, '-')}` : 'status-новый';
         
         const row = document.createElement('tr');
         row.innerHTML = `
@@ -287,13 +298,13 @@ function displayOrders() {
                        ${isSelected ? 'checked' : ''} onchange="toggleOrderSelection(${order.id}, this)"
                        style="transform: scale(1.2); margin: 0;">
             </td>
-            <td><strong>#${order.id}</strong></td>
-            <td>${order.fullName}</td>
-            <td>${order.phone}</td>
-            <td>${order.email}</td>
-            <td>${order.orderType}</td>
-            <td><strong>${order.total.toLocaleString()} ₽</strong></td>
-            <td>${order.date}</td>
+            <td><strong>#${order.id || ''}</strong></td>
+            <td>${order.fullName || ''}</td>
+            <td>${order.phone || ''}</td>
+            <td>${order.email || ''}</td>
+            <td>${order.orderType || 'custom'}</td>
+            <td><strong>${(order.total || 0).toLocaleString()} ₽</strong></td>
+            <td>${order.date || ''}</td>
             <td>
                 <select class="status-select ${statusClass}" data-id="${order.id}" onchange="updateOrderStatus(${order.id}, this)"
                         style="min-height: 44px; min-width: 120px;">
@@ -316,13 +327,15 @@ function displayOrders() {
         ordersTableBody.appendChild(row);
     });
     
-    ordersCountElement.textContent = `Показано ${filteredOrders.length} из ${orders.length} заказов`;
+    if (ordersCountElement) {
+        ordersCountElement.textContent = `Показано ${filteredOrders.length} из ${orders.length} заказов`;
+    }
     
     // Обновляем чекбокс "Выбрать все"
     updateSelectAllCheckbox();
 }
 
-// Показать детали заказа (обновлено для отображения информации об оплате)
+// Показать детали заказа
 function showOrderDetails(orderId) {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
@@ -334,31 +347,31 @@ function showOrderDetails(orderId) {
     detailsGrid.innerHTML = `
         <div class="detail-item">
             <h4>Клиент</h4>
-            <p>${order.fullName}</p>
+            <p>${order.fullName || ''}</p>
         </div>
         <div class="detail-item">
             <h4>Контакты</h4>
-            <p>📞 ${order.phone}<br>📧 ${order.email}</p>
+            <p>📞 ${order.phone || ''}<br>📧 ${order.email || ''}</p>
         </div>
         <div class="detail-item">
             <h4>Адрес доставки</h4>
-            <p>${order.address}</p>
+            <p>${order.address || ''}</p>
         </div>
         <div class="detail-item">
             <h4>Тип заказа</h4>
-            <p>${order.orderType}</p>
+            <p>${order.orderType || 'custom'}</p>
         </div>
         <div class="detail-item">
             <h4>Сумма</h4>
-            <p><strong>${order.total.toLocaleString()} ₽</strong></p>
+            <p><strong>${(order.total || 0).toLocaleString()} ₽</strong></p>
         </div>
         <div class="detail-item">
             <h4>Дата</h4>
-            <p>${order.date}</p>
+            <p>${order.date || ''}</p>
         </div>
         <div class="detail-item">
             <h4>Статус</h4>
-            <p class="status-${order.status.toLowerCase().replace(' ', '-')}">${order.status}</p>
+            <p class="status-${order.status ? order.status.toLowerCase().replace(/ /g, '-') : 'новый'}">${order.status || 'Новый'}</p>
         </div>
         <div class="detail-item">
             <h4>Оплата</h4>
@@ -371,8 +384,8 @@ function showOrderDetails(orderId) {
         detailsGrid.innerHTML += `
             <div class="detail-item">
                 <h4>Детали оплаты</h4>
-                <p>Карта: **** ${order.paymentDetails.lastFourDigits}<br>
-                   Дата оплата: ${order.paymentDetails.paymentDate}</p>
+                <p>Карта: **** ${order.paymentDetails.lastFourDigits || ''}<br>
+                   Дата оплата: ${order.paymentDetails.paymentDate || ''}</p>
             </div>
         `;
     }
@@ -387,10 +400,10 @@ function showOrderDetails(orderId) {
             itemRow.className = 'item-row';
             itemRow.innerHTML = `
                 <div>
-                    <strong>${item.name}</strong>
+                    <strong>${item.name || ''}</strong>
                     ${item.description ? `<p style="font-size: 14px; color: var(--text-secondary); margin-top: 5px;">${item.description}</p>` : ''}
                 </div>
-                <div>${item.price.toLocaleString()} ₽</div>
+                <div>${(item.price || 0).toLocaleString()} ₽</div>
             `;
             itemsList.appendChild(itemRow);
         });
@@ -446,7 +459,8 @@ function updateOrderStatus(orderId, selectElement) {
         localStorage.setItem('compyou_orders', JSON.stringify(orders));
         
         // Обновляем отображение
-        loadOrders();
+        updateStats();
+        displayOrders();
         showNotification(`Статус заказа #${orderId} изменен на "${newStatus}"`);
     }
 }
@@ -461,7 +475,9 @@ function deleteOrder(orderId) {
         selectedOrders.delete(orderId);
         
         // Обновляем отображение
-        loadOrders();
+        filteredOrders = [...orders];
+        updateStats();
+        displayOrders();
         showNotification(`Заказ #${orderId} удален`, 'warning');
     }
 }
@@ -499,7 +515,9 @@ function deleteSelectedOrders() {
         localStorage.setItem('compyou_orders', JSON.stringify(orders));
         
         selectedOrders.clear();
-        loadOrders();
+        filteredOrders = [...orders];
+        updateStats();
+        displayOrders();
         showNotification(`${selectedOrders.size} заказ(ов) удалено`, 'warning');
     }
 }
@@ -518,7 +536,8 @@ function markAsProcessed() {
     });
     
     localStorage.setItem('compyou_orders', JSON.stringify(orders));
-    loadOrders();
+    updateStats();
+    displayOrders();
     showNotification(`${selectedOrders.size} заказ(ов) отмечен(ы) как "В обработке"`);
 }
 
@@ -555,9 +574,7 @@ function updateSelectAllCheckbox() {
     const allCheckboxes = document.querySelectorAll('.order-checkbox');
     const selectAllCheckbox = document.getElementById('selectAllCheckbox');
     
-    if (allCheckboxes.length === 0) {
-        selectAllCheckbox.checked = false;
-        selectAllCheckbox.indeterminate = false;
+    if (allCheckboxes.length === 0 || !selectAllCheckbox) {
         return;
     }
     
@@ -575,7 +592,7 @@ function updateSelectAllCheckbox() {
     }
 }
 
-// Экспорт в Excel (обновленная версия для админ-панели)
+// Экспорт в Excel
 function exportToExcel() {
     if (orders.length === 0) {
         showNotification('Нет заказов для экспорта', 'error');
@@ -585,19 +602,19 @@ function exportToExcel() {
     // Определяем, что экспортировать: все заказы или отфильтрованные
     const exportData = filteredOrders.length > 0 ? filteredOrders : orders;
     
-    // Создание CSV строки с правильной кодировкой UTF-8 с BOM
+    // Создание CSV строки
     let csv = '\ufeff';
     csv += 'ID;ФИО;Телефон;Email;Адрес;Тип заказа;Сумма;Дата;Статус;Оплата\n';
     
     exportData.forEach(order => {
-        const escapedFullName = order.fullName.replace(/"/g, '""');
-        const escapedEmail = order.email.replace(/"/g, '""');
-        const escapedAddress = order.address.replace(/"/g, '""');
-        const escapedOrderType = order.orderType.replace(/"/g, '""');
-        const escapedStatus = order.status.replace(/"/g, '""');
+        const escapedFullName = (order.fullName || '').replace(/"/g, '""');
+        const escapedEmail = (order.email || '').replace(/"/g, '""');
+        const escapedAddress = (order.address || '').replace(/"/g, '""');
+        const escapedOrderType = (order.orderType || '').replace(/"/g, '""');
+        const escapedStatus = (order.status || '').replace(/"/g, '""');
         const paymentMethod = order.payment === 'card' ? 'Картой онлайн' : 'При получении';
         
-        csv += `"${order.id}";"${escapedFullName}";"${order.phone}";"${escapedEmail}";"${escapedAddress}";"${escapedOrderType}";"${order.total}";"${order.date}";"${escapedStatus}";"${paymentMethod}"\n`;
+        csv += `"${order.id || ''}";"${escapedFullName}";"${order.phone || ''}";"${escapedEmail}";"${escapedAddress}";"${escapedOrderType}";"${order.total || 0}";"${order.date || ''}";"${escapedStatus}";"${paymentMethod}"\n`;
     });
     
     // Создание и скачивание файла
@@ -614,266 +631,85 @@ function exportToExcel() {
     showNotification(`Экспортировано ${exportData.length} заказ(ов) в CSV файл`);
 }
 
-// Экспорт в Word (обновленная версия для админ-панели)
-function exportToWord() {
-    if (orders.length === 0) {
-        showNotification('Нет заказов для экспорта', 'error');
+// Синхронизация с облаком - ИСПРАВЛЕННАЯ ВЕРСИЯ
+async function syncWithCloud() {
+    if (isSyncing) {
+        showNotification('Синхронизация уже выполняется...', 'info');
         return;
     }
     
-    // Определяем, что экспортировать: все заказы или отфильтрованные
-    const exportData = filteredOrders.length > 0 ? filteredOrders : orders;
+    isSyncing = true;
+    showNotification('Начинаем синхронизацию...', 'info');
     
-    // Функция для безопасного экранирования данных
-    function escapeForXML(text) {
-        if (!text) return '';
-        return String(text)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
-    
-    // Создание HTML-содержимого для Word
-    let content = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-<meta charset="UTF-8">
-<meta name="ProgId" content="Word.Document">
-<meta name="Generator" content="Microsoft Word 15">
-<meta name="Originator" content="Microsoft Word 15">
-<title>Заказы CompYou</title>
-<style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    h1 { color: #333; border-bottom: 2px solid #8a2be2; padding-bottom: 10px; }
-    .info { margin: 15px 0; color: #666; }
-    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-    th { background-color: #f2f2f2; padding: 10px; border: 1px solid #ddd; text-align: left; }
-    td { padding: 10px; border: 1px solid #ddd; }
-    tr:nth-child(even) { background-color: #f9f9f9; }
-    .total { margin-top: 20px; font-weight: bold; color: #8a2be2; }
-    .status-new { color: #ffaa00; }
-    .status-processing { color: #2196F3; }
-    .status-shipped { color: #4CAF50; }
-    .status-delivered { color: #00cc66; }
-    .status-cancelled { color: #ff5555; }
-</style>
-</head>
-<body>
-<h1>Заказы CompYou</h1>
-<div class="info">
-    <p><strong>Дата экспорта:</strong> ${escapeForXML(new Date().toLocaleString('ru-RU'))}</p>
-    <p><strong>Всего заказов:</strong> ${exportData.length}</p>
-    <p><strong>Фильтр:</strong> ${currentFilter === 'all' ? 'Все заказы' : 'Статус: ' + currentFilter}</p>
-    <p><strong>Сортировка:</strong> ${currentSort === 'date' ? 'По дате' : currentSort === 'total' ? 'По сумме' : 'По ID'}</p>
-</div>
-<table border="1" cellspacing="0" cellpadding="5">
-<tr>
-    <th>ID</th>
-    <th>ФИО</th>
-    <th>Телефон</th>
-    <th>Email</th>
-    <th>Адрес</th>
-    <th>Тип заказа</th>
-    <th>Сумма</th>
-    <th>Дата</th>
-    <th>Статус</th>
-    <th>Оплата</th>
-</tr>
-`;
-    
-    exportData.forEach(order => {
-        const statusClass = `status-${order.status.toLowerCase().replace(' ', '-')}`;
-        const paymentMethod = order.payment === 'card' ? 'Картой онлайн' : 'При получении';
+    try {
+        // Проверяем, существует ли cloudDB
+        if (!window.cloudDB) {
+            showNotification('Облачная база данных не инициализирована', 'error');
+            isSyncing = false;
+            return;
+        }
         
-        content += `<tr>
-    <td>${escapeForXML(order.id)}</td>
-    <td>${escapeForXML(order.fullName)}</td>
-    <td>${escapeForXML(order.phone)}</td>
-    <td>${escapeForXML(order.email)}</td>
-    <td>${escapeForXML(order.address)}</td>
-    <td>${escapeForXML(order.orderType)}</td>
-    <td>${escapeForXML(order.total.toLocaleString())} ₽</td>
-    <td>${escapeForXML(order.date)}</td>
-    <td class="${statusClass}">${escapeForXML(order.status)}</td>
-    <td>${escapeForXML(paymentMethod)}</td>
-</tr>`;
-    });
-    
-    // Добавляем итоговую сумму
-    const totalSum = exportData.reduce((sum, order) => sum + order.total, 0);
-    content += `</table>
-<div class="total">
-    Общая сумма экспортированных заказов: ${totalSum.toLocaleString()} ₽
-</div>
-</body>
-</html>`;
-    
-    // Создание и скачивание файла с правильной кодировкой
-    const blob = new Blob(['\ufeff', content], {type: 'application/msword;charset=UTF-8'});
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `compyou_orders_${new Date().toISOString().slice(0,10)}.doc`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    showNotification(`Экспортировано ${exportData.length} заказ(ов) в Word документ`);
+        // Сохраняем текущие локальные заказы
+        const localOrdersBefore = orders.length;
+        
+        // Выполняем синхронизацию
+        const result = await cloudDB.syncOrders();
+        
+        if (result.success) {
+            // Загружаем обновленные данные
+            const freshOrders = await cloudDB.loadAllOrders();
+            
+            // Сохраняем данные
+            orders = freshOrders;
+            filteredOrders = [...freshOrders];
+            localStorage.setItem('compyou_orders', JSON.stringify(freshOrders));
+            
+            // Обновляем интерфейс
+            updateStats();
+            displayOrders();
+            
+            const localOrdersAfter = freshOrders.length;
+            const difference = localOrdersAfter - localOrdersBefore;
+            
+            if (difference > 0) {
+                showNotification(`Синхронизация завершена! Добавлено ${difference} новых заказов. Всего: ${localOrdersAfter}`, 'success');
+            } else if (difference < 0) {
+                showNotification(`Синхронизация завершена! Заказов стало меньше на ${Math.abs(difference)}. Всего: ${localOrdersAfter}`, 'warning');
+            } else {
+                showNotification(`Синхронизация завершена! Заказов: ${localOrdersAfter}`, 'success');
+            }
+            
+        } else {
+            if (result.reason === 'cloud_disabled') {
+                showNotification('Облачное хранилище отключено. Проверьте настройки.', 'warning');
+            } else {
+                showNotification(`Ошибка синхронизации: ${result.error || 'Неизвестная ошибка'}`, 'error');
+            }
+        }
+        
+    } catch (error) {
+        console.error('Ошибка синхронизации:', error);
+        showNotification(`Ошибка синхронизации: ${error.message}`, 'error');
+    } finally {
+        isSyncing = false;
+    }
 }
 
-// Печать заказа (обновленная версия)
-function printOrder() {
-    const orderDetails = document.getElementById('orderDetails');
-    if (!orderDetails.classList.contains('show')) return;
-    
-    const orderId = document.getElementById('orderDetailsId').textContent;
-    const orderGrid = document.getElementById('orderDetailsGrid').innerHTML;
-    const orderItems = document.getElementById('orderItemsList').innerHTML;
-    
-    const printWindow = window.open('', '_blank');
-    
-    printWindow.document.write(`
-        <!DOCTYPE html>
-        <html lang="ru">
-        <head>
-            <meta charset="UTF-8">
-            <title>Накладная CompYou - ${orderId}</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    padding: 20px;
-                    color: #333;
-                }
-                
-                h1 {
-                    color: #8a2be2;
-                    border-bottom: 2px solid #8a2be2;
-                    padding-bottom: 10px;
-                    margin-bottom: 30px;
-                }
-                
-                .header {
-                    text-align: center;
-                    margin-bottom: 40px;
-                }
-                
-                .company-info {
-                    margin-bottom: 30px;
-                    padding-bottom: 20px;
-                    border-bottom: 1px solid #ddd;
-                }
-                
-                .details-grid {
-                    display: grid;
-                    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                    gap: 20px;
-                    margin-bottom: 30px;
-                }
-                
-                .detail-item {
-                    background-color: #f9f9f9;
-                    padding: 15px;
-                    border-radius: 8px;
-                    border: 1px solid #ddd;
-                }
-                
-                .detail-item h4 {
-                    color: #666;
-                    font-size: 14px;
-                    margin-bottom: 8px;
-                }
-                
-                .detail-item p {
-                    font-size: 16px;
-                    font-weight: 500;
-                }
-                
-                .items-section {
-                    margin-top: 30px;
-                }
-                
-                .item-row {
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 12px 0;
-                    border-bottom: 1px solid #ddd;
-                }
-                
-                .item-row:last-child {
-                    border-bottom: none;
-                }
-                
-                .footer {
-                    margin-top: 50px;
-                    padding-top: 20px;
-                    border-top: 2px solid #333;
-                    font-size: 14px;
-                    color: #666;
-                }
-                
-                @media print {
-                    body { padding: 0; }
-                    .no-print { display: none !important; }
-                    @page { margin: 1cm; }
-                }
-                
-                /* Для мобильных */
-                @media (max-width: 768px) {
-                    .details-grid {
-                        grid-template-columns: 1fr;
-                    }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1><i class="fas fa-file-invoice"></i> Накладная CompYou</h1>
-                <div class="company-info">
-                    <p><strong>CompYou - Сборка игровых ПК</strong></p>
-                    <p>Саранск, ул.Транспортная 11</p>
-                    <p>8 (987) 570-07-85 | kuvsinov094@gmail.com</p>
-                </div>
-            </div>
-            
-            <h2>Детали заказа ${orderId}</h2>
-            
-            <div class="details-grid">
-                ${orderGrid}
-            </div>
-            
-            <div class="items-section">
-                <h3>Товары в заказе:</h3>
-                <div class="items-list">
-                    ${orderItems}
-                </div>
-            </div>
-            
-            <div class="footer">
-                <p><strong>Дата печати:</strong> ${new Date().toLocaleString('ru-RU')}</p>
-                <p>Подпись ответственного лица: ________________________</p>
-                <p>Печать</p>
-            </div>
-            
-            <div class="no-print" style="margin-top: 30px; text-align: center;">
-                <button onclick="window.print()" style="padding: 10px 20px; background: #8a2be2; color: white; border: none; border-radius: 4px; cursor: pointer;">Печать</button>
-                <button onclick="window.close()" style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">Закрыть</button>
-            </div>
-        </body>
-        </html>
-    `);
-    
-    printWindow.document.close();
-    
-    // Ждем загрузку контента и показываем кнопку печати
-    printWindow.onload = function() {
-        printWindow.document.querySelector('.no-print').style.display = 'block';
-    };
+// Простое обновление списка заказов
+function refreshOrders() {
+    loadOrders();
+    showNotification('Список заказов обновлен', 'info');
 }
 
-// Показать уведомление (аналогичная функция из script.js)
+// Выход из админ-панели
+function logoutAdmin() {
+    if (confirm('Вы уверены, что хотите выйти из админ-панели?')) {
+        localStorage.removeItem('compyou_admin_logged');
+        window.location.href = 'index.html';
+    }
+}
+
+// Показать уведомление
 function showNotification(message, type = 'success') {
     // Создаем элемент уведомления
     const notification = document.createElement('div');
@@ -930,98 +766,3 @@ function showNotification(message, type = 'success') {
         }, 300);
     }, 3000);
 }
-
-// Выход из админ-панели
-function logoutAdmin() {
-    if (confirm('Вы уверены, что хотите выйти из админ-панели?')) {
-        localStorage.removeItem('compyou_admin_logged');
-        window.location.href = 'index.html';
-    }
-}
-
-// Синхронизация с облаком
-// Синхронизация с облаком
-async function syncWithCloud() {
-    showNotification('Начинаем синхронизацию...', 'info');
-    
-    try {
-        // Проверяем, существует ли cloudDB
-        if (!window.cloudDB) {
-            showNotification('Облачная база данных не инициализирована', 'error');
-            return;
-        }
-        
-        // Сохраняем текущие локальные заказы перед синхронизацией
-        const localOrdersBefore = JSON.parse(localStorage.getItem('compyou_orders')) || [];
-        
-        // Выполняем синхронизацию
-        const result = await cloudDB.syncOrders();
-        
-        if (result.success) {
-            // Принудительно обновляем локальные данные из cloudDB
-            try {
-                // Загружаем свежие данные из облака
-                const cloudOrders = await cloudDB.loadAllOrders();
-                
-                // Сохраняем в localStorage
-                localStorage.setItem('compyou_orders', JSON.stringify(cloudOrders));
-                
-                // Обновляем глобальные переменные
-                orders = cloudOrders;
-                filteredOrders = [...cloudOrders];
-                
-                // Обновляем интерфейс
-                updateStats();
-                displayOrders();
-                
-                showNotification(`Синхронизация завершена. Загружено ${result.uploaded || 0} заказов. Всего: ${cloudOrders.length}`, 'success');
-                
-            } catch (loadError) {
-                console.error('Ошибка загрузки после синхронизации:', loadError);
-                showNotification(`Синхронизация выполнена, но ошибка обновления: ${loadError.message}`, 'warning');
-                // Все равно обновляем интерфейс с текущими данными
-                await loadOrders();
-            }
-            
-        } else {
-            if (result.reason === 'cloud_disabled') {
-                showNotification('Облачное хранилище отключено. Проверьте настройки.', 'warning');
-            } else {
-                showNotification(`Ошибка синхронизации: ${result.error || 'Неизвестная ошибка'}`, 'error');
-            }
-        }
-        
-    } catch (error) {
-        console.error('Ошибка синхронизации:', error);
-        showNotification(`Ошибка синхронизации: ${error.message}`, 'error');
-    }
-
-
-}
-
-// Принудительное обновление данных после синхронизации
-async function forceRefreshAfterSync() {
-    try {
-        if (window.cloudDB) {
-            // Загружаем свежие данные из облака
-            const freshOrders = await cloudDB.loadAllOrders();
-            
-            // Сохраняем в localStorage
-            localStorage.setItem('compyou_orders', JSON.stringify(freshOrders));
-            
-            // Обновляем глобальные переменные
-            orders = freshOrders;
-            filteredOrders = [...freshOrders];
-            
-            // Обновляем интерфейс
-            updateStats();
-            displayOrders();
-            
-            return true;
-        }
-    } catch (error) {
-        console.error('Ошибка принудительного обновления:', error);
-    }
-    return false;
-}
-
