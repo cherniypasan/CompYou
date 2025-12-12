@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
     
-    loadOrders();
+    loadOrders();    
     updateStats();
     
     // Обработчик поиска
@@ -933,11 +933,31 @@ async function syncWithCloud() {
     showNotification('Начинаем синхронизацию...', 'info');
     
     try {
-        // Тестируем подключение
-        const testResult = await cloudDB.testConnection();
+        // Проверяем, существует ли cloudDB
+        if (!window.cloudDB) {
+            showNotification('Облачная база данных не инициализирована', 'error');
+            return;
+        }
+        
+        // Проверяем подключение к облаку
+        let testResult;
+        try {
+            // Проверяем наличие метода testConnection
+            if (typeof cloudDB.testConnection === 'function') {
+                testResult = await cloudDB.testConnection();
+            } else {
+                // Если метода нет, используем checkCloudAvailability
+                testResult = await cloudDB.checkCloudAvailability();
+                testResult = { success: testResult, message: testResult ? 'Подключение установлено' : 'Подключение не установлено' };
+            }
+        } catch (testError) {
+            console.error('Ошибка проверки подключения:', testError);
+            testResult = { success: false, message: 'Ошибка проверки подключения' };
+        }
+        
         console.log('Тест подключения:', testResult);
         
-        if (!testResult.success) {
+        if (!testResult || !testResult.success) {
             showNotification('Облако недоступно. Проверьте подключение.', 'error');
             return;
         }
@@ -954,6 +974,9 @@ async function syncWithCloud() {
         }
         
     } catch (error) {
+        console.error('Ошибка синхронизации:', error);
         showNotification(`Ошибка синхронизации: ${error.message}`, 'error');
     }
+
 }
+
