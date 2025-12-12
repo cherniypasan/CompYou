@@ -532,8 +532,14 @@
             <button class="btn" onclick="syncWithCloud()" style="min-height: 44px;">
                 <i class="fas fa-sync-alt"></i> Синхронизировать
             </button>
-            <button class="btn" onclick="forceRefreshAfterSync()" style="min-height: 44px;">
-                <i class="fas fa-redo"></i> Обновить
+            <button class="btn" onclick="refreshOrders()" style="min-height: 44px;">
+                <i class="fas fa-redo"></i> Обновить список
+            </button>
+            <button class="btn" onclick="verifyOrderIntegrity()" style="min-height: 44px;">
+                <i class="fas fa-search"></i> Проверить данные
+            </button>
+            <button class="btn" onclick="forceSaveCurrentData()" style="min-height: 44px;">
+                <i class="fas fa-save"></i> Сохранить сейчас
             </button>
         </div>
 
@@ -625,3 +631,4 @@
 </body>
 
 </html>
+
