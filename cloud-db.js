@@ -5,7 +5,7 @@ class CloudDB {
     constructor() {
         // URL вашего Google Apps Script веб-приложения
         // ВАЖНО: Замените на ваш URL после настройки
-        this.API_URL = 'https://script.google.com/macros/s/AKfycbwidi9h-CG6dsUUqmGmhC0HqwS4nmxfM8mn5JIBIn9KRNOEY4vBy_VpzpT8rao8rN_b/exec';
+        this.API_URL = 'https://script.google.com/macros/s/AKfycbxYD-SE50fIFSWoYJHHRhl1yw38TtffNQxCI715cH3q98gqD3ZKnDMH10EsPpszbpNN3g/exec';
         
         // Флаг для использования облака
         this.useCloud = false;
@@ -580,3 +580,4 @@ class CloudDB {
 
 // Создаем глобальный экземпляр CloudDB
 window.cloudDB = new CloudDB();
+
